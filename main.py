@@ -7,6 +7,8 @@ from dateutil import parser
 import jsonpickle
 import requests
 import requests_cache
+from bulletin import Bulletin
+
 requests_cache.install_cache('data_cache')
 
 tzinfos_us = {
@@ -25,7 +27,7 @@ tzinfos_us = {
 
 front_types = ('WARM', 'COLD', 'STNRY', 'OCFNT', 'TROF')
 strength = ('WK', 'MDT', 'STG')
-remove_newlines = re.compile(r'\n\d')
+remove_newlines = re.compile(r'\n(\d)')
 fronts = re.compile(
     '({})( ({}))? (.*)\n'.format('|'.join(front_types), '|'.join(strength)))
 date_expr = re.compile(r'VALID (\d{6})')
@@ -35,37 +37,27 @@ splitter = re.compile('\x01(.*?)\x03', re.DOTALL)
 version = re.compile('ASUS1|ASUS01|ASUS02')
 
 
-class Bulletin:
-    def __str__(self) -> str:
-        return 'Bulletin. Valid: {}. Issued: {}. Type: {}. Fronts: {}.'.format(
-            self.valid,
-            self.issued,
-            self.type,
-            self.fronts
-        )
-
-    def __init__(self, valid, issued, fronts, type):
-        self.valid = valid
-        self.issued = issued
-        self.fronts = fronts
-        self.type = type
-
-
 def parse_codsus(s, year):
     t = version.findall(s)[0]
     parse_front = parse_codsus_front if t == 'ASUS1' or t == 'ASUS01' else parse_codsus_hr_front
+
+    def parse_fronts(x):
+        return x[0], parse_front(x[3].split())
+
     d = edit_time(bulletin_date_expr.findall(s))
-    s = remove_newlines.sub(' ', s)
+    s = remove_newlines.sub(r' \g<1>', s)
     date = date_expr.findall(s)[0]
     month, day, hour = map(int, (date[:2], date[2:4], date[4:6]))
     date = datetime(year, month, day, hour, tzinfo=timezone.utc)
-    f = Bulletin(
+    res = Bulletin(
         date,
         parser.parse(d, tzinfos=tzinfos_us) if d else parser.parse('19000101 00:00 UTC'),
-        list(map(lambda x: (x[0], parse_front(x[3].split())), fronts.findall(s))),
+        list(map(parse_fronts, fronts.findall(s))),
         'SR' if t == 'ASUS1' or t == 'ASUS01' else 'HR'
     )
-    return f
+    if not res.fronts:
+        raise ValueError("No fronts in bulletin")
+    return res
 
 
 def edit_time(t):
@@ -79,11 +71,17 @@ def edit_time(t):
 
 
 def parse_codsus_front(l):
-    return [(int(x[:2]), int(x[2:])) for x in l]
+    raise ValueError('Fuck CODSUS')
+    # a = [(int(x[:2]), int(x[2:])) for x in l]
+    # if any(x < 0 for x, _ in a):
+    #     raise ValueError('Negative number in bulletin (see 2003-08-09 03:00:00)')
+    # if any(x[0] == '0' for x in l):
+    #     raise ValueError
+    # return a
 
 
 def parse_codsus_hr_front(l):
-    return [[(int(x[:3]) / 10, int(x[3:]) / 10) for x in l]]
+    return [(int(x[:3]) / 10, -int(x[3:]) / 10) for x in l]
 
 
 def get_year(year):
@@ -128,8 +126,10 @@ for i in range(2000, 2019):
     # f.close()
     print(i)
 import pickle
+
 f = open('data.bin', 'wb')
 pickle.dump(r, f, pickle.HIGHEST_PROTOCOL)
+print('Total:', len(r))
 
 # print(len(d))
 # for i in d.keys():
