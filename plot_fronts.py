@@ -15,6 +15,9 @@ from shapely.geometry import Point, LineString
 import pickle
 from bulletin import Bulletin
 import itertools
+import pandas as pd
+import xarray as xr
+from tqdm import tqdm
 
 from geodesiclinestogis.geodesicline2gisfile import GeodesicLine2Gisfile
 line_builder = GeodesicLine2Gisfile(loglevel='ERROR')
@@ -32,8 +35,8 @@ project = partial(
     pyproj.Proj(crs))  # destination coordinate system
 inf = open('data.bin', 'rb')
 bulletins = pickle.load(inf)
-for date, bulletin in bulletins.items():
-    # print(date)
+data = []
+for date, bulletin in tqdm(bulletins.items()):
     result = np.zeros((height, width), dtype=np.uint8)
     for front in bulletin.fronts:
         if front[0] == 'TROF':
@@ -43,7 +46,15 @@ for date, bulletin in bulletins.items():
         for a, b in zip(front[1], front[1][1:]):
             line = transform(project, LineString(line_builder.gdlComp((a[1], a[0], b[1], b[0]), km_pts=20)))
             shape.append(line.buffer(50000))
-        result = rasterio.features.rasterize(shapes=shape, transform=tf, all_touched=True, default_value=color, out=result)
+        try:
+            result = rasterio.features.rasterize(shapes=shape, transform=tf, all_touched=True, default_value=color, out=result)
+        except:
+            pass
+            # print(date, front)
+    if result.sum() == 0:
+        print("No fronts at", date)
+        continue
+    data.append(xr.DataArray(np.expand_dims(result, 0), coords=[[date], np.arange(277), np.arange(349)], dims=['time', 'y', 'x']))
     # cmap = matplotlib.colors.ListedColormap(['black', 'red', 'blue', 'green', 'purple'])
     # plt.imshow(result, cmap=cmap, interpolation='nearest', origin='lower')
     # with rasterio.open('netcdf:/mnt/ldm_vol_DESKTOP-DSIGH25-Dg0_Volume1/DiplomData2/NARR/air.2m.nc:air') as tmp:
@@ -52,4 +63,5 @@ for date, bulletin in bulletins.items():
     # plt.imshow(a, alpha=0.5)
     # plt.show()
     # exit()
-
+result = xr.concat(data, dim='time').to_dataset(name='fronts')
+result.to_netcdf('plotted_fronts.nc', encoding={'fronts': {'zlib': True, 'complevel': 1}})
